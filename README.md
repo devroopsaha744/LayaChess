@@ -20,7 +20,8 @@ Kaggle dataset (private): `devroopsaha/chessbench-av` — test set + 2 train sha
 ## Run on Kaggle
 1. Import `notebooks/laya_chess_finetune.ipynb`.
 2. Add input: `chessbench-av`. Accelerator **GPU T4 x2**, Internet **ON**.
-3. Run with `QUICK_TEST = True` (~45 min): check sanity cells + loss going down.
+   Optional: **Add-ons → Secrets** → `HF_TOKEN` (write token) to upload checkpoints to a private Hugging Face repo `<user>/laya-chess`.
+3. Run with `QUICK_TEST = True` (~30 min): check sanity cells + loss going down.
 4. Set `QUICK_TEST = False` → **Save & Run All (Commit)** (~11 h). Checkpoint lands in `/kaggle/working/ckpt`.
 
 ## Plan
