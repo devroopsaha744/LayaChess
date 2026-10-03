@@ -1,0 +1,51 @@
+# LayaChess engine
+
+Plays chess with the fine-tuned Laya checkpoint from Hugging Face (`datafreak/laya-chess`), with or without search.
+
+| File | What |
+|---|---|
+| `laya_chess/encoding.py` | Position + move → Laya `score` question (identical to the training notebook) |
+| `laya_chess/model.py` | Loads the checkpoint from HF (or a local folder), scores every legal move in batches, caches positions |
+| `laya_chess/search.py` | MCTS / PUCT (AlphaZero/Leela style): Laya's move scores → priors + values, exact mate/draw handling, tree reuse |
+| `laya_chess/uci.py` | UCI engine for lichess-bot, cutechess/fastchess, chess GUIs |
+| `laya_chess/cli.py` | Analyse one position from the terminal |
+| `tests/` | Search tests with a fast stand-in model (`pytest tests`) |
+
+## Setup
+```bash
+cd engine
+uv venv --python 3.12 .venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+hf auth login          # once, so the private checkpoint can be downloaded
+```
+
+## Use
+```bash
+# analyse a position: network scores, then a 30-position search
+python -m laya_chess.cli --fen "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4" --nodes 30
+
+# UCI engine (default checkpoint datafreak/laya-chess, latest revision)
+python -m laya_chess.uci
+python -m laya_chess.uci --nodes 0 --ignore-clock      # network only, no search
+python -m laya_chess.uci --checkpoint convaiinnovations/laya   # untrained Laya baseline
+```
+
+UCI options: `Checkpoint`, `Revision`, `Device` (auto/cuda/mps/cpu), `Nodes` (fixed evaluations per move, 0 = use the clock),
+`MaxNodes`, `CPuct`, `PriorTemp`, `BatchLeaves` (leaves per network call; 1 on a Mac, 4–16 on a CUDA GPU), `MoveOverheadMs`, `UseClock`.
+
+## How the search works
+For a position *s*, one batched Laya call scores every legal move *a*: `Q(s,a)` = win chance for the side to move.
+- **Priors** `P(a) = softmax(Q(s,a) / PriorTemp)` decide which moves to explore first.
+- **Value** of a new leaf = `max_a Q(leaf, a)`; values are backed up with alternating perspective.
+- Each edge starts with the network's `Q(s,a)` as one virtual visit, then averages in search results.
+- Mate, stalemate, repetition and 50-move draws come from the rules, never from the network.
+- Selection: PUCT `Q + c·P·√N / (1 + n)`; the move played is the most visited one. The subtree is reused between moves.
+
+## Speed (measured)
+One position = one Laya pass per legal move (~35), so search is expensive:
+
+| Hardware | Move scores / s | Positions / s |
+|---|---|---|
+| Apple M4 (MPS, fp16) | ~14 | ~0.4 |
+
+Use slow time controls or small `Nodes` on a Mac; a CUDA GPU is several times faster.

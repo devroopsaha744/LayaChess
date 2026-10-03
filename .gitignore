@@ -7,3 +7,5 @@ ckpt/
 *.pt
 .kaggle/
 access_token
+.venv/
+.pytest_cache/

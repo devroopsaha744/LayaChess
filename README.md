@@ -15,6 +15,7 @@ Kaggle dataset (private): `devroopsaha/chessbench-av` — test set + 2 train sha
 | `notebooks/chessbench_download.ipynb` | Downloads ChessBench shards into Kaggle output → make a dataset from it |
 | `notebooks/laya_chess_finetune.ipynb` | Fine-tuning notebook (Kaggle, 2× T4, fp16, checkpoints + resume) |
 | `notebooks/kernel-metadata.json` | Kaggle settings for `kaggle kernels push -p notebooks` |
+| `engine/` | Chess engine: loads the model from Hugging Face, MCTS search, UCI (see `engine/README.md`) |
 | `docs/plan.md` | Research notes and full plan |
 
 ## Run on Kaggle
