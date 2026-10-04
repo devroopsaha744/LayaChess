@@ -39,6 +39,7 @@ CFG = dict(
     HF_REPO_NAME="laya-chess-v3", # checkpoints -> <your HF user>/laya-chess-v3 (private)
     N_TRAIN_SHARDS=2,
     MAX_TRAIN_RECORDS=None,
+    SKIP_V2_RECORDS=True,         # start after the records v2 already trained on (read from v2's chess_meta.json)
     N_BINS=32,
     LABEL_SIGMA=0.75,             # soft-label width in bins
     HEAD_LAYERS=2,
@@ -360,6 +361,10 @@ if meta:
         for g, src in zip(opt.param_groups, groups): g["peak"] = src["peak"]
         print("optimizer state restored")
     print(f"resumed at step {step}, {consumed} records consumed")
+elif CFG["INIT"] == "v2" and CFG["SKIP_V2_RECORDS"]:
+    v2_meta = json.loads((init_dir / "chess_meta.json").read_text())
+    consumed = int(v2_meta["consumed"])     # same data order as v2 -> everything after this is unseen
+    print(f"skipping the {consumed:,} records v2 already trained on (v2 {v2_meta['tag']}, step {v2_meta['step']})")
 if consumed >= len(train_refs): consumed = 0
 
 train_dl = DataLoader(RecordDataset(train_refs[consumed:], train_bags), batch_size=CFG["BATCH_SIZE"], shuffle=False,
