@@ -28,11 +28,12 @@ LEVELS = [1320, 1500, 1700, 1900, 2100]   # Stockfish UCI_Elo levels
 GAMES_PER_LEVEL = 24                      # 12 openings x both colours
 LAYA_NODES = 32                           # positions Laya searches per move (fixed -> same strength on any GPU)
 SF_SECONDS = 0.3                          # Stockfish time per move
-TIME_BUDGET_H = 6.0                       # stop starting new games after this (Kaggle quota safety)
+TIME_BUDGET_H = 5.75                      # stop starting new games after this (~7 h quota left: setup + last games + upload fit)
 CHECKPOINT = "datafreak/laya-chess"
 REVISION = None                           # pin a commit for exact reproducibility
 MAX_PLIES = 300
-UPLOAD_TO_HF = True                       # also push PGNs + results to the model repo under matches/
+UPLOAD_TO_HF = True                       # push PGNs + results to the model repo under matches/ (every 30 min + at the end)
+BACKUP_EVERY_MIN = 30
 """)
 
 code("""
@@ -133,7 +134,20 @@ def scoreboard(rs):
         lines.append(f"  SF {lvl}: {n:2d} games +{r.count(1.0)} ={r.count(0.5)} -{r.count(0.0)}  score {s:5.1%}  -> perf ~{lvl + elo(s):.0f}")
     return "\\n".join(lines)
 
-t0, seen = time.time(), 0
+def backup(note):
+    """Copy every finished game to the HF repo, so a killed session loses at most the games in progress."""
+    if not UPLOAD_TO_HF:
+        return
+    try:
+        from huggingface_hub import HfApi
+        HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+            folder_path="/kaggle/working/matches", repo_id=CHECKPOINT, path_in_repo="matches",
+            allow_patterns=["*.pgn", "*.json", "*.jsonl", "*.png", "*.log"], commit_message=note)
+        print(f"[backup] {note} -> https://huggingface.co/{CHECKPOINT}/tree/main/matches", flush=True)
+    except Exception as e:
+        print("[backup] failed (will retry next time):", e, flush=True)
+
+t0, seen, last_backup = time.time(), 0, time.time()
 while any(p.poll() is None for p in procs):
     time.sleep(120)
     rs = results()
@@ -142,6 +156,9 @@ while any(p.poll() is None for p in procs):
         pps = [x["positions_per_s"] for x in rs]
         print(f"--- {(time.time() - t0) / 3600:.2f} h | {len(rs)}/{len(tasks)} games | ~{sum(pps)/len(pps):.1f} positions/s per GPU ---")
         print(scoreboard(rs), flush=True)
+    if time.time() - last_backup > BACKUP_EVERY_MIN * 60 and rs:
+        backup(f"matches (in progress): {len(rs)} games"); last_backup = time.time()
+backup(f"matches (all workers done): {len(results())} games")
 for w in range(n_gpu):
     print(f"worker {w} exit code {procs[w].returncode}; last log lines:")
     print("".join(open(f"/kaggle/working/matches/worker{w}.log").readlines()[-3:]))
