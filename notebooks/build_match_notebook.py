@@ -16,9 +16,10 @@ def code(s): cells.append({"cell_type": "code", "metadata": {}, "execution_count
 md("""
 # LayaChess (fine-tuned + search) vs an opponent ladder
 
-Fine-tuned Laya (`datafreak/laya-chess`) with MCTS search plays a ladder of opponents, from a random mover up to
-Stockfish at its lowest official strength (`UCI_Elo` 1320, which is the same as Skill Level 0 in Stockfish's code).
-Weaker Stockfish rungs limit how many positions it may search per move.
+Fine-tuned Laya (`datafreak/laya-chess`) with MCTS search plays Stockfish at its lowest official strength
+(`UCI_Elo` 1320 = Skill Level 0 in Stockfish's code) and weakened versions of it that play a random move NN% of the time.
+The weakened versions are rated separately against Stockfish 1320 (`engine/laya_chess/calibrate.py`), so every
+opponent has an Elo and Laya gets one maximum-likelihood rating, like engine rating lists (CCRL/CEGT) do.
 Both T4s play games in parallel (one engine per GPU). Every finished game is saved immediately to `/kaggle/working/matches/`.
 
 **Run:** GPU **T4 x2**, Internet **ON**, secret `HF_TOKEN` attached (needed for the private model). Then **Save & Run All (Commit)**.
@@ -26,14 +27,10 @@ Both T4s play games in parallel (one engine per GPU). Every finished game is sav
 
 code("""
 # ===== Settings =====
-# Opponent ladder, weakest first:
-#   "random"       random legal moves
-#   "greedy"       mate-in-1 if any, else the biggest capture/promotion, else random
-#   "sf1320-n50"   Stockfish UCI_Elo 1320 limited to 50 nodes per move (very weak)
-#   "sf1320-n500"  Stockfish UCI_Elo 1320 limited to 500 nodes per move
-#   "sf1320"       Stockfish UCI_Elo 1320 with SF_SECONDS per move (official 1320 strength)
-LEVELS = ["random", "greedy", "sf1320-n50", "sf1320-n500", "sf1320"]
-KNOWN_ELO = {"sf1320": 1320}              # opponents with an official rating (for the performance estimate)
+# Opponents, weakest first. "sf1320-rNN" = Stockfish UCI_Elo 1320 that plays a random legal move NN% of the time.
+LEVELS = ["sf1320-r50", "sf1320-r25", "sf1320"]
+# Elo of each opponent: sf1320 is official; fill the others from calibration.json (python -m laya_chess.calibrate)
+KNOWN_ELO = {"sf1320": 1320}
 GAMES_PER_LEVEL = 24                      # 12 openings x both colours
 LAYA_NODES = 32                           # positions Laya searches per move (fixed -> same strength on any GPU)
 SF_SECONDS = 0.3                          # Stockfish time per move
@@ -128,26 +125,18 @@ class FuncPlayer:   # same .play(board, limit).move interface as a python-chess 
     def __init__(self, f): self.f = f
     def play(self, board, limit): return types.SimpleNamespace(move=self.f(board))
 
-def random_move(b):
-    return random.choice(list(b.legal_moves))
+SF_LIMIT = chess.engine.Limit(time=cfg["sf_seconds"])
 
-def greedy_move(b):
-    best, best_v = [], -1
-    for mv in b.legal_moves:
-        b.push(mv); mate = b.is_checkmate(); b.pop()
-        if mate:
-            return mv
-        v = VAL[b.piece_type_at(mv.to_square)] if b.piece_type_at(mv.to_square) else (1 if b.is_en_passant(mv) else 0)
-        v += 8 if mv.promotion == chess.QUEEN else 0
-        if v > best_v: best, best_v = [mv], v
-        elif v == best_v: best.append(mv)
-    return random.choice(best)
+def mixed(p):   # Stockfish 1320, but a uniformly random legal move with probability p (same as calibrate.py)
+    def move(b):
+        if random.random() < p:
+            return random.choice(list(b.legal_moves))
+        return sf.play(b, SF_LIMIT).move
+    return move
 
 def opponent(name):
-    if name == "random": return FuncPlayer(random_move), None
-    if name == "greedy": return FuncPlayer(greedy_move), None
-    if name.startswith("sf1320-n"): return sf, chess.engine.Limit(nodes=int(name.split("-n")[1]))
-    if name == "sf1320": return sf, chess.engine.Limit(time=cfg["sf_seconds"])
+    if name == "sf1320": return sf, SF_LIMIT
+    if name.startswith("sf1320-r"): return FuncPlayer(mixed(int(name.split("-r")[1]) / 100)), None
     raise ValueError(name)
 
 deadline = time.time() + cfg["budget_s"]
@@ -255,7 +244,7 @@ for _ in range(60):
     lo, hi = (mid, hi) if expected(mid) < actual else (lo, mid)
 perf = (lo + hi) / 2
 if rated:
-    print(f"\\nPerformance vs Stockfish 1320: ~{perf:.0f} on Stockfish's UCI_Elo scale "
+    print(f"\\nLayaChess rating vs rated opponents {sorted(KNOWN_ELO)}: ~{perf:.0f} on Stockfish's UCI_Elo scale "
           f"({actual:g}/{len(rated)} points, Laya searching {LAYA_NODES} positions per move)"
           + ("  [0 or 100% score: only a bound, not an estimate]" if actual in (0, len(rated)) else ""))
 
@@ -272,8 +261,8 @@ import matplotlib.pyplot as plt
 lv = [l for l in LEVELS if l in summary["levels"]]
 sc = [summary["levels"][l]["score"] * 100 for l in lv]
 fig, ax = plt.subplots(figsize=(7, 4))
-NICE = {"random": "Random\\nmover", "greedy": "Greedy\\ncapture bot", "sf1320-n50": "Stockfish\\n50 nodes",
-        "sf1320-n500": "Stockfish\\n500 nodes", "sf1320": "Stockfish\\nElo 1320"}
+NICE = {"sf1320-r50": "Stockfish 1320\\n+50% random", "sf1320-r25": "Stockfish 1320\\n+25% random",
+        "sf1320": "Stockfish\\nElo 1320"}
 ax.bar([NICE.get(l, str(l)) for l in lv], sc, color="#769656")
 ax.axhline(50, color="#888", lw=1, ls="--")
 for i, v in enumerate(sc):
