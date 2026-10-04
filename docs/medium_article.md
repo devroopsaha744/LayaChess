@@ -1,207 +1,144 @@
-# I Taught a Decision Model to Play Chess Over a Weekend (and It Only Cried a Little)
+# I Taught a Decision Model to Play Chess Over a Weekend
 
-*How I took a 421M-parameter AI that had never seen a chessboard, fed it 2 million Stockfish opinions on free GPUs, and built a chess engine around it. With crashes, cooked laptops and one very humbling Stockfish.*
+*A 421M-parameter model that had never seen a chessboard, two million Stockfish opinions, free GPUs, and one very humbling fish.*
 
 ![LayaChess learning curve](learning_curve.png)
 
----
+## It started on a Thursday
 
-## The idea (a.k.a. "how hard could it be?")
+I was at work, I had half a day left, and I had just fallen into a rabbit hole about decision models. These are models that don't write you an essay. You give them a situation and a question with some options, and they tell you how likely each option is to be right. That's it.
 
-It was a Thursday. I was at work. I had half a day plus a weekend, and I had just read about **decision models**: AI models that don't write essays, they **make choices**. You hand them a situation and a question, and they score the options. Clean. Fast. No rambling.
+Two of them looked interesting. Jev from TypeSafe AI is a closed API, and I didn't have a key, so that settled that. Laya from Convai Innovations is open source under Apache 2.0, runs on a 421M-parameter ModernBERT-large, and ships with a notebook for fine-tuning on Kaggle's free GPUs.
 
-Two of them caught my eye:
+And chess is basically one long decision problem. Here's the board, here are your legal moves, pick one. You can't even make an illegal move, because you only ever offer it legal ones. So by Thursday evening the plan was simple: teach Laya chess, compare it with real engines, and do it before Monday. On free GPUs.
 
-- **Jev** by TypeSafe AI: closed API, strong out of the box, and I had exactly zero API keys. Moving on.
-- **Laya** by Convai Innovations: open source (Apache 2.0), a 421M-parameter ModernBERT-large under the hood, and it comes with a fine-tuning notebook that runs on Kaggle's free T4 GPUs. 👀
+It wasn't simple. But it worked, mostly.
 
-And chess is *literally* a decision problem. Every turn: here's the board, here are your legal moves, pick one. No illegal moves possible, because you only ever offer legal ones. (Looking at you, chatbots that castle through their own pieces.)
+## What does Laya know about chess out of the box?
 
-So the plan wrote itself:
+Nothing, it turns out.
 
-> Teach Laya chess. Compare it with Stockfish and Leela. Do it in a weekend. On free GPUs.
+I asked base Laya for an opening move as White and it picked b4. As Black against 1.e4 it played h6. Then I set up Scholar's Mate, the position where White can play Qxf7 and win on the spot, and it preferred the quiet little pawn move d3.
 
-Reader, it was not that simple. But it worked.
+On a set of positions it had never seen, it picked Stockfish's best move 6% of the time. A random legal move gets you about 3%. So it was roughly twice as good as a coin flip, with a lot more electricity.
 
----
+## Not labeling a million positions myself
 
-## Step 0: What does an untrained Laya think of chess?
+My first plan was to take games from Lichess, run Stockfish on a million positions overnight, and label every move myself. My laptop did not love this plan, and neither did I.
 
-Before training, I asked base Laya to pick an opening move as White.
+Then I found out DeepMind had already done it, just slightly bigger. For their "searchless chess" paper they released ChessBench: 15.3 billion position and move pairs, each with Stockfish's win probability attached. Every legal move, already scored.
 
-It said **b4**. (The Polish Opening. Bold. Respectable among the hipsters.)
+The catch is that it's stored in a custom .bag format that you normally read through Apache Beam. I didn't want Apache Beam in my weekend, so I looked at how the files are laid out. It's just records stored back to back, with a list of byte offsets at the end. Each record is a position, a move and a win chance. About thirty lines of Python later I had my own reader.
 
-Then as Black, against 1.e4, it went **h6**. 🫠
+I obviously couldn't use all 15 billion examples. At the speed I ended up training, that would have taken around 120 years of free Kaggle quota. I took the test set and two of the training files instead, about 3.2 GB, and had Kaggle download them straight into a dataset so none of it went through my laptop.
 
-And when I set up the classic Scholar's Mate, where White can play Qxf7# and win on the spot, Laya preferred… **d3**. A quiet pawn move. While checkmate sat right there.
+## How do you ask a decision model about chess?
 
-Best-move accuracy against Stockfish on held-out positions: **6%**. Picking a random legal move gets you about 3%. So: twice as good as a coin flip with extra steps.
+Laya likes questions with options, so that's what it gets. For every legal move it sees something like this:
 
-We had work to do.
+*"black plays Rg4 (rook g6-g4). Win chance for black?"*
 
----
+The options are ten win-chance levels, 0 to 10%, 10 to 20%, and so on up to 100%. The board goes in as context, written out as piece lists:
 
-## Step 1: The data, a.k.a. "please don't make me run Stockfish all night"
-
-My original plan was to take Lichess games, run Stockfish on a million positions overnight, and label every move. My laptop was not excited about this plan.
-
-Then I remembered DeepMind already did it, at a slightly larger scale. Their **ChessBench** dataset (from the "searchless chess" paper) has **15.3 billion** positions-and-moves, each labeled with Stockfish's win probability. Every legal move. Already scored.
-
-Small problem: it's stored in a custom `.bag` format, normally read with Apache Beam. I didn't want Apache Beam in my life, so I wrote a tiny reader instead. A `.bag` file is just records back to back, with an index of byte offsets at the end, and each record is `(position, move, win chance)`. About 30 lines of Python, no Beam required.
-
-I didn't need 15 billion examples (that would take my free GPUs roughly 120 years; I did the math and then lay down for a bit). I grabbed **the test set + 2 training files**, about 3.2 GB, and saved them as a Kaggle dataset. Kaggle even downloaded them for me, so not a single byte went through my laptop.
-
----
-
-## Step 2: How do you ask a decision model about chess?
-
-Laya speaks in questions with options. So for every legal move, I ask:
-
-> *"black plays Rg4 (rook g6-g4). Win chance for black?"*
-> Options: 0–10%, 10–20%, … 90–100%
-
-The board goes in as context:
-
-```json
+```
 {"to_move": "black",
  "white": "Kg1 Qc5 Rd1 Rf1 Bc4 Pf2 Pg2 Ph2 Pe3 Pb4 Pa5",
  "black": "Kg8 Qe5 Rg6 Re8 Nd5 Pa6 Pc6 Ph6 Pb7 Pf7 Pg7",
  "castling": "-", "en_passant": "-"}
 ```
 
-The model answers with a probability over the 10 levels, I take the average, and that's the move's win chance. To play, I score every legal move and pick the highest one.
+Laya spreads its confidence over the ten levels, I take the average, and that's the move's win chance. To actually play, I score every legal move and pick the best one.
 
-This is the same recipe DeepMind found works best ("action-value prediction"): judge each move by how winning the position is *after* it. The twist is that my model is a general decision model answering in its own question format, not a transformer built for chess.
+This is the same idea DeepMind found worked best in their paper: judge each move by how good the position is after you play it. The difference is that my model isn't a transformer built for chess. It's a general decision model answering in its own question format.
 
-Fun fact: my **first** version described the board as an 8×8 grid and used 16 win-chance levels. That came to **335 tokens per question** and trained at a snail-like **49,000 examples per hour**. Switching to piece lists and 10 levels cut it to **~194 tokens** and **doubled the speed to ~97,000 per hour**. Same idea, half the words. Turns out models, like people, prefer shorter questions.
+My first version wrote the board out as an 8x8 grid and used sixteen levels instead of ten. That came to 335 tokens per question and trained at about 49,000 examples an hour. Switching to piece lists and ten levels brought it down to around 194 tokens and doubled the speed to about 97,000 an hour. Same idea, half the words. Models apparently like short questions as much as people do.
 
----
+## Training on free GPUs, or: the crash compilation
 
-## Step 3: Training on free GPUs (the crash compilation)
+Kaggle gives you two NVIDIA T4s, around 30 GPU hours a week, and a 12-hour limit per run. Here's roughly how my weekend went.
 
-Kaggle gives you 2× NVIDIA T4s, about 30 GPU hours a week, and runs of up to 12 hours. Here's how it went:
+The first crash was a StopIteration error from inside ModernBERT. I was splitting each batch across both GPUs with PyTorch's DataParallel, and the model tried to figure out which device it was on by looking at its own parameters. In the copies on each GPU those parameters technically don't exist, so it gave up. A small patch telling it where else to look fixed it.
 
-**Crash #1: "StopIteration in replica 1."**
-I split each batch across the two GPUs with PyTorch's `DataParallel`. ModernBERT, the model inside Laya, asked "what device am I on?" by looking at its own parameters… and in the GPU copies, it had none. So it panicked. Fix: a tiny patch telling it where to look.
+The second crash was running out of memory. 421M parameters plus the optimizer's bookkeeping is a lot for a T4. I ended up making the notebook test how much fits before training starts, and only turn on the slower memory-saving tricks if it actually needs them.
 
-**Crash #2: Out of memory.**
-421M parameters + the optimizer's memory = a T4 begging for mercy. Fix: the notebook now *tests* memory before training and only switches on the slower tricks (gradient checkpointing, smaller batches) when it actually needs them.
+The third crash was me. I started the second training run before the first one had finished, so it picked up a half-finished checkpoint, and both runs started uploading to the same Hugging Face repo. Cancel, breathe, wait, try again.
 
-**Crash #3: Me.**
-I started the second training run before the first one finished. It grabbed a half-finished checkpoint, and both runs tried to upload to the same Hugging Face repo. Fix: cancel, breathe, wait for the first run to finish, try again.
+I also learned that if you paste an API token into a chat you should delete it afterwards, and that a deleted token left in a Kaggle secret gives you a very confident "Invalid username or password".
 
-Along the way I also learned that tokens you paste into a chat should be deleted afterwards, and that a deleted token in a Kaggle secret produces a very confident "Invalid username or password." 🙃
+Once things were stable, each run trained for eleven hours, saved a checkpoint every 45 minutes, and pushed it to Hugging Face. The second run started exactly where the first one stopped: same step, same spot in the data, same optimizer state.
 
-Once it was stable, each run trained for 11 hours, saved a checkpoint every 45 minutes, and uploaded it to Hugging Face. Run 2 picked up exactly where run 1 stopped: same step, same position in the data, same optimizer state.
+## Did it learn anything?
 
----
+It did.
 
-## Step 4: Did it actually learn?
+- Before training (base Laya): picks Stockfish's best move 6% of the time, win-chance error 28.6 points
+- After 128k examples: 16%, error 12.9
+- After 512k examples: 22%, error 10.4
+- After 1.03M examples (end of run one): 24%, error 9.1
+- After 2.05M examples (end of run two): 27%, error 8.2
 
-Yes! 🎉
+The percentage is how often its favourite move matches Stockfish's favourite, on 300 positions from games it never trained on. The error is how far its win estimate is from Stockfish's, on average.
 
-| Training examples | Best-move accuracy | Win-chance error |
-|---|---|---|
-| 0 (base Laya) | 6% | 28.6 points |
-| 128k | 16% | 12.9 |
-| 512k | 22% | 10.4 |
-| 1.03M (end of run 1) | 24% | 9.1 |
-| **2.05M (end of run 2)** | **27%** | **8.2** |
+Most of the improvement happens in the first hundred thousand examples. That's when it learns to tell a good position from a bad one. After that it gets into the much harder part, which is telling a good move from a slightly better one, and progress slows right down.
 
-*(Best-move accuracy = how often its #1 move matches Stockfish's #1 move, on 300 positions from games it never saw. Win-chance error = how far off its win estimate is, on average.)*
+The best-move number is also noisier than I expected. With 300 test positions it can swing by two or three points just by chance. At one point it went from 21.7% down to 19.7% and I seriously considered a different hobby, but the loss kept going down, and the next checkpoint was higher again. Restarting the learning rate for the second run caused the same kind of dip for a couple of hours before it recovered and passed run one.
 
-A few things I learned from staring at these numbers at 2 a.m.:
+Numbers are nice, but the vibe check is what made me happy. It now opens with d4 instead of b4. Against 1.e4 its top choices are d6, d5, e6, Nf6 and c6, which are all real openings. In the Scholar's Mate position it finds Qxf7 mate with 94% confidence, and the next best move sits at 33%. Leave a free queen lying around and it takes it, also at 94%.
 
-- **The first 100k examples do the heavy lifting.** The model quickly figures out *"how good is this position?"* Then it spends the next million learning the much harder *"which move is better?"*
-- **The best-move number is noisy.** With 300 test positions it wobbles about ±2.5 points. At one point it dropped from 21.7% to 19.7% and I briefly considered a career change. The loss kept improving, so it was just noise.
-- **Restarting the learning rate causes a dip.** At the start of run 2, the scores got slightly worse for a couple of hours, then recovered and beat run 1. Expected, but still stressful.
+From b4 and h6 to taking your queen and mating you in one, in a weekend. I'm more proud of that than I should be.
 
-And the vibe check:
+## Turning a model into an engine
 
-- Opening move: **d4** ✅ (not b4)
-- Reply to 1.e4: **d6, d5, e6, Nf6, c6**: all real openings ✅ (not h6)
-- Scholar's Mate position: **Qxf7# with 94% confidence**, next best at 33% ✅
-- A free queen sitting there: **takes it, 94%** ✅
+A model that scores moves still isn't a chess engine, so I built the rest around it.
 
-From "b4 and h6" to "takes your queen and mates you in one" over a weekend. I'm unreasonably proud.
+The search is Monte Carlo tree search, the same family Leela Chess Zero and AlphaZero use. Laya's scores decide which moves are worth exploring first, and its win chances tell the search how good each position is. Checkmates and draws come straight from the rules of chess, never from the model.
 
----
+It speaks UCI, the standard engine protocol, so it plugs into chess apps, match tools and Lichess bots. There's a small browser board where you can play against it and see its win chance for each of its candidate moves after it plays, which is weirdly fun to watch. And there's a match script that plays Stockfish from a set of openings, with both colours, and saves every game.
 
-## Step 5: Building an actual engine
+Before trusting the search, I tested it with a fake model that only counts material. On its own, that fake model happily grabs a pawn defended by another pawn and loses its queen. With just twenty positions of search, it sees the trap and leaves the pawn alone. So the search does its job.
 
-A model that scores moves isn't an engine yet. So I built the rest:
+## Then Stockfish showed up
 
-- **Search: MCTS (Monte Carlo tree search)**, the same family of algorithm Leela Chess Zero and AlphaZero use. Laya's move scores decide which moves to explore first, and its win chances tell the search how good a position is. Checkmates and draws come straight from the rules, never from the model.
-- **UCI support**, the standard engine protocol, so it plugs into chess apps, match tools and Lichess bots.
-- **A browser board**: play against it locally, and after every move it shows its win chance for its top candidate moves. It's weirdly satisfying to watch it "think".
-- **A match runner** against Stockfish, with openings, both colours, PGN files and an Elo estimate.
+Time to see how strong it actually is.
 
-I tested the search with a fake "material counting" model first: without search it happily grabbed a pawn defended by another pawn and lost its queen; with just 20 positions of search it saw the trap. Search works. 🧠
+On my MacBook, without search, LayaChess played Stockfish set to an Elo of 1320, which is the weakest official setting Stockfish has. It lost. It lost again. The third game went 88 moves, which felt like a moral victory, and then it lost that one too. Meanwhile the laptop was running its GPU flat out and getting hot enough to make toast, so I stopped.
 
----
+I moved the matches to Kaggle and turned search on. It lost the first three games there as well.
 
-## Step 6: The humbling (Stockfish enters the chat)
+That sent me into the Stockfish source code, where I found out you can't make it any weaker than 1320. In the code, Elo 1320 is the same thing as its lowest skill level. People hear "1320" and think beginner, but Stockfish at 1320 doesn't hang pieces the way beginners do. It's a sneakily solid opponent.
 
-Time to find out how strong it is.
+So the honest summary is this. LayaChess v2 plays real chess. It opens sensibly, finds mates and punishes free pieces. It's still weaker than Stockfish at its lowest setting.
 
-On my MacBook, without search, LayaChess played Stockfish at **UCI_Elo 1320**, Stockfish's weakest official setting.
+And when I think about it, that makes sense. DeepMind trained their models on 15 billion examples and I used 2 million, which is about 7,500 times less. Search is also painfully slow for my setup, because Laya reads the whole board again for every single legal move. That's around 35 passes of a 421M model for one position, which works out to roughly 2.5 positions a second on a T4. Stockfish looks at millions.
 
-It lost. Then it lost again. The third game lasted **88 moves** (a real fight!), and then it lost.
-
-Meanwhile my laptop was running its GPU at 100% and getting hot enough to make toast.
-
-So I moved the matches to Kaggle *with* search… and it lost the first three there too. 😭
-
-Then I went down a rabbit hole and found out something fun: you **can't make Stockfish weaker than 1320**. In Stockfish's source code, Elo 1320 maps to "Skill Level 0", the lowest it goes. Most people think of "1320" as beginner level, but Stockfish 1320 doesn't hang pieces the way beginners do. It's a sneakily solid opponent.
-
-The honest summary:
-
-> LayaChess v2 plays real chess (sensible openings, finds mates, punishes free pieces), but it's still weaker than Stockfish at its lowest setting.
-
-And honestly? That makes sense:
-
-- **DeepMind trained on 15 billion examples. I used 2 million.** That's 7,500× less data.
-- **Search is slow.** Laya reads the whole board once *per legal move*. That's about 35 passes of a 421M model per position: about 2.5 positions per second on a T4, versus millions for Stockfish.
-
----
-
-## What's next: v3 (same brain, faster answers)
+## What's next
 
 The fix for the speed problem is to stop asking one question per move.
 
-**v3 reads the board once** with the same Laya encoder I trained this weekend, and a small new "move head" scores **every legal move in one pass**. That's the design Leela Chess Zero uses, with Laya's brain inside.
+The next version reads the board once with the same Laya encoder I trained this weekend, and a small new head scores every legal move in a single pass. That's essentially how Leela Chess Zero is built, just with Laya's brain inside. It should be around 35 times faster per position, the input is half as long so training is quicker too, and it starts from the encoder I already trained, so none of this weekend goes to waste.
 
-- About **35× faster** per position, so search can look at hundreds of positions per move instead of about 30.
-- About **2× shorter input** (94 tokens instead of 194), so training is faster too.
-- It **starts from v2's trained encoder**, so this weekend's training isn't thrown away. It's the foundation.
+After that comes a Lichess bot, so it gets a real rating from real games, and so anyone can challenge it.
 
-Then: a **Lichess bot**, so it gets a real rating from real games, and so you can challenge it yourself.
+## What I'd tell myself on Thursday
 
----
+Check whether someone already made the dataset before you plan to label it yourself. Someone may have done it with 15 billion examples.
 
-## Things I'd tell myself on Thursday
+Shorter inputs train faster. Halving the tokens doubled my speed.
 
-1. **Read the dataset docs before planning to label your own.** Someone may already have done it with 15 billion examples.
-2. **Shorter inputs = faster training.** Half the tokens, double the speed.
-3. **Never judge a training run by one number.** Watch the loss and the error; the accuracy will catch up.
-4. **Save checkpoints somewhere outside the machine.** Kaggle runs end, laptops overheat, and I start things too early.
-5. **"Elo 1320" is not a beginner.** Respect the fish. 🐟
-6. **A general-purpose model *can* learn chess.** It just needs a lot more practice than one weekend allows.
+Don't judge a training run by one noisy number. Watch the loss and the error too, and the accuracy will usually catch up.
 
----
+Save checkpoints somewhere other than the machine doing the training. Kaggle sessions end, laptops overheat, and sometimes you start things too early.
+
+Stockfish at 1320 is not a beginner. Respect the fish.
+
+And a general-purpose model really can learn chess. It just needs a lot more practice than one weekend gives it.
 
 ## Links
 
-- 🤗 Model: huggingface.co/datafreak/laya-chess
-- 💻 Code (training notebooks, engine, browser board): github.com/devroopsaha744/LayaChess
-- ♟️ Laya by Convai Innovations · ChessBench by Google DeepMind · Stockfish · python-chess
+Model: huggingface.co/datafreak/laya-chess
 
-*If you've got a spare GPU and a chess grudge, come play it. It will take your free queen.*
+Code, training notebooks and the engine: github.com/devroopsaha744/LayaChess
 
----
+Built on Laya by Convai Innovations, ChessBench by Google DeepMind, Stockfish, and python-chess.
 
-<!-- Notes for publishing (delete before posting):
-- Medium: import this file or paste section by section; upload learning_curve.png where it's referenced.
-- Add a GIF or screenshot of the browser board right after "Step 5" (python -m laya_chess.play).
-- If the repos stay private, remove the two links or replace them with "coming soon".
--->
+If you have a spare GPU and a grudge against chess, come play it. It will take your free queen.
