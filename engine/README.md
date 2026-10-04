@@ -44,8 +44,8 @@ Pick your colour and how long Laya thinks (instant = network only; 10–30 s = s
 ## Match vs Stockfish
 ```bash
 brew install stockfish
-python -m laya_chess.match --games 24 --sf-elo 1320 --laya-nodes 0       # network only (~2 h on a Mac)
-python -m laya_chess.match --games 24 --sf-elo 1320 --laya-seconds 10    # with search (~8 h on a Mac)
+python -m laya_chess.match --games 24 --sf-elo 1320 --laya-nodes 0       # network only (~1 h on a Mac)
+python -m laya_chess.match --games 24 --sf-elo 1320 --laya-seconds 10    # with search (~3 h on a Mac)
 ```
 Each opening (12 mainstream lines) is played twice with colours swapped. Prints W/D/L, score, Elo difference with a
 95% interval and a performance rating on Stockfish's `UCI_Elo` scale; games go to `matches/*.pgn` with Laya's win
