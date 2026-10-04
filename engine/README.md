@@ -9,6 +9,8 @@ Plays chess with the fine-tuned Laya checkpoint from Hugging Face (`datafreak/la
 | `laya_chess/search.py` | MCTS / PUCT (AlphaZero/Leela style): Laya's move scores → priors + values, exact mate/draw handling, tree reuse |
 | `laya_chess/uci.py` | UCI engine for lichess-bot, cutechess/fastchess, chess GUIs |
 | `laya_chess/cli.py` | Analyse one position from the terminal |
+| `laya_chess/play.py` + `web/` | Play LayaChess in your browser (local board, Laya's win chance per move) |
+| `laya_chess/match.py` | Match vs strength-limited Stockfish with an Elo estimate + PGN |
 | `tests/` | Search tests with a fast stand-in model (`pytest tests`) |
 
 ## Setup
@@ -32,6 +34,22 @@ python -m laya_chess.uci --checkpoint convaiinnovations/laya   # untrained Laya 
 
 UCI options: `Checkpoint`, `Revision`, `Device` (auto/cuda/mps/cpu), `Nodes` (fixed evaluations per move, 0 = use the clock),
 `MaxNodes`, `CPuct`, `PriorTemp`, `BatchLeaves` (leaves per network call; 1 on a Mac, 4–16 on a CUDA GPU), `MoveOverheadMs`, `UseClock`.
+
+## Play in the browser
+```bash
+python -m laya_chess.play            # opens http://localhost:8000
+```
+Pick your colour and how long Laya thinks (instant = network only; 10–30 s = search on a Mac).
+
+## Match vs Stockfish
+```bash
+brew install stockfish
+python -m laya_chess.match --games 24 --sf-elo 1320 --laya-nodes 0       # network only (~2 h on a Mac)
+python -m laya_chess.match --games 24 --sf-elo 1320 --laya-seconds 10    # with search (~8 h on a Mac)
+```
+Each opening (12 mainstream lines) is played twice with colours swapped. Prints W/D/L, score, Elo difference with a
+95% interval and a performance rating on Stockfish's `UCI_Elo` scale; games go to `matches/*.pgn` with Laya's win
+chance on every move.
 
 ## How the search works
 For a position *s*, one batched Laya call scores every legal move *a*: `Q(s,a)` = win chance for the side to move.

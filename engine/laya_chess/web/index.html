@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LayaChess</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e2dc;
+    --light: #eeeed2; --dark: #769656; --sel: rgba(255, 213, 0, .55); --last: rgba(255, 235, 59, .45);
+    --check: radial-gradient(circle, rgba(255,0,0,.85) 0%, rgba(255,0,0,.35) 45%, transparent 75%);
+    --dot: rgba(20, 20, 20, .22); --accent: #3b6e2c; --bar: #769656; --bar-bg: #ecebe6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --panel: #22211f; --text: #ecebe8; --muted: #9b9a95; --line: #34332f;
+      --bar-bg: #2e2d2a; --accent: #8fbf6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { max-width: 1100px; margin: 0 auto; padding: 18px 16px 6px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+  header .model { color: var(--muted); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 32px; display: grid;
+         grid-template-columns: minmax(0, 620px) minmax(280px, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+  .board-wrap { position: relative; width: 100%; max-width: 620px; }
+  .board { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-template-rows: repeat(8, minmax(0, 1fr));
+           width: 100%; aspect-ratio: 1;
+           border-radius: 6px; overflow: hidden; box-shadow: 0 2px 14px rgba(0,0,0,.18); user-select: none; }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center; cursor: default; }
+  .sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+  .sq.last::before, .sq.sel::before { content: ""; position: absolute; inset: 0; }
+  .sq.last::before { background: var(--last); } .sq.sel::before { background: var(--sel); }
+  .sq.check::after { content: ""; position: absolute; inset: 0; background: var(--check); }
+  .sq.movable { cursor: pointer; }
+  .sq.target { cursor: pointer; }
+  .sq.target .hint { position: absolute; width: 30%; height: 30%; border-radius: 50%; background: var(--dot); z-index: 2; }
+  .sq.target.capture .hint { width: 92%; height: 92%; background: transparent; border: 6px solid var(--dot); }
+  .board .pc { font-size: min(8.5vw, 58px); }
+  .pc { position: relative; z-index: 3; font-size: 44px; line-height: 1;
+        font-family: "Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols2", serif; }
+  .pc.w { color: #fff; -webkit-text-stroke: 1.4px #222; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+  .pc.b { color: #1a1a1a; text-shadow: 0 1px 1px rgba(255,255,255,.25); }
+  .coord { position: absolute; font-size: 11px; font-weight: 600; z-index: 1; opacity: .85; }
+  .coord.file { right: 4px; bottom: 2px; } .coord.rank { left: 4px; top: 2px; }
+  .sq.l .coord { color: var(--dark); } .sq.d .coord { color: var(--light); }
+
+  .promo { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+           background: rgba(0,0,0,.45); border-radius: 6px; z-index: 10; }
+  .promo.show { display: flex; }
+  .promo div { background: var(--panel); border-radius: 10px; padding: 10px; display: flex; gap: 6px; }
+  .promo button { font-size: 44px; width: 64px; height: 64px; border: 1px solid var(--line); border-radius: 8px;
+                  background: var(--light); cursor: pointer; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .panel + .panel { margin-top: 14px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  label { font-size: 13px; color: var(--muted); }
+  select, button.btn { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
+                       background: var(--panel); color: var(--text); }
+  button.btn { cursor: pointer; } button.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .status { font-weight: 600; min-height: 22px; }
+  .status .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
+                  border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .meter { height: 10px; background: var(--bar-bg); border-radius: 6px; overflow: hidden; margin: 6px 0 4px; }
+  .meter > span { display: block; height: 100%; background: var(--bar); transition: width .4s; }
+  .muted { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 4px 0; vertical-align: middle; }
+  td.mv { width: 70px; font-weight: 600; } td.pct { width: 54px; text-align: right; }
+  td.vis { width: 56px; text-align: right; color: var(--muted); font-size: 12px; }
+  .bar { height: 8px; background: var(--bar-bg); border-radius: 4px; margin: 0 8px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--bar); }
+  tr.played td.mv { color: var(--accent); }
+  .moves { font-variant-numeric: tabular-nums; max-height: 220px; overflow: auto; font-size: 14px; }
+  .moves span.n { color: var(--muted); display: inline-block; width: 30px; }
+  .moves div { display: grid; grid-template-columns: 30px 1fr 1fr; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LayaChess</h1>
+  <span class="model" id="model">loading…</span>
+</header>
+<main>
+  <div class="board-wrap">
+    <div class="board" id="board"></div>
+    <div class="promo" id="promo"><div id="promo-choices"></div></div>
+  </div>
+  <div>
+    <div class="panel">
+      <h2>Game</h2>
+      <div class="row">
+        <label for="color">Play as</label>
+        <select id="color"><option value="white">White</option><option value="black">Black</option><option value="random">Random</option></select>
+        <label for="think">Laya thinks</label>
+        <select id="think">
+          <option value="0">Instantly (no search)</option>
+          <option value="3">3 s (search)</option>
+          <option value="10" selected>10 s (search)</option>
+          <option value="30">30 s (search)</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="new">New game</button>
+        <button class="btn" id="undo">Undo</button>
+        <button class="btn" id="flip">Flip board</button>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="panel">
+      <h2>Laya's view</h2>
+      <div id="view" class="muted">Laya's evaluation of its move appears here after it plays.</div>
+    </div>
+    <div class="panel">
+      <h2>Moves</h2>
+      <div class="moves" id="moves"></div>
+    </div>
+  </div>
+</main>
+<script>
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟︎" };
+const FILES = "abcdefgh";
+let S = null, selected = null, flipped = false, busy = false, pendingPromo = null, thinkStart = 0, timer = null;
+
+const $ = id => document.getElementById(id);
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function parseFen(fen) {
+  const rows = fen.split(" ")[0].split("/"), pos = {};
+  rows.forEach((row, i) => { let f = 0; for (const ch of row) {
+    if (/\d/.test(ch)) f += +ch; else { pos[FILES[f] + (8 - i)] = ch; f++; } } });
+  return pos;
+}
+function humanToMove() { return S && !S.over && S.turn === S.human && !busy; }
+
+function render() {
+  if (!S) return;
+  const pos = parseFen(S.fen), board = $("board");
+  board.innerHTML = "";
+  const targets = selected ? (S.legal[selected] || []).map(t => t.slice(0, 2)) : [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const file = flipped ? 7 - c : c, rank = flipped ? r + 1 : 8 - r, sq = FILES[file] + rank;
+    const d = document.createElement("div");
+    d.className = "sq " + ((file + rank) % 2 === 0 ? "d" : "l");
+    if (S.last && (S.last.slice(0, 2) === sq || S.last.slice(2, 4) === sq)) d.classList.add("last");
+    if (sq === selected) d.classList.add("sel");
+    if (sq === S.check) d.classList.add("check");
+    const p = pos[sq];
+    if (p) {
+      const s = document.createElement("span");
+      const white = p === p.toUpperCase();
+      s.className = "pc " + (white ? "w" : "b"); s.textContent = GLYPH[p.toLowerCase()];
+      d.appendChild(s);
+      if (humanToMove() && S.legal[sq]) d.classList.add("movable");
+    }
+    if (targets.includes(sq)) { d.classList.add("target"); if (p) d.classList.add("capture");
+      const h = document.createElement("span"); h.className = "hint"; d.appendChild(h); }
+    if (r === 7) { const k = document.createElement("span"); k.className = "coord file"; k.textContent = FILES[file]; d.appendChild(k); }
+    if (c === 0) { const k = document.createElement("span"); k.className = "coord rank"; k.textContent = rank; d.appendChild(k); }
+    d.onclick = () => clickSquare(sq);
+    board.appendChild(d);
+  }
+  const m = S.model;
+  $("model").textContent = `${m.checkpoint} · ${m.tag}${m.examples ? ` · ${(m.examples / 1e6).toFixed(2)}M training examples` : ""} · ${m.device}`;
+  renderStatus(); renderView(); renderMoves();
+  $("undo").disabled = busy || !S.san.length;
+}
+function renderStatus() {
+  const st = $("status");
+  if (busy) { const s = ((Date.now() - thinkStart) / 1000).toFixed(0);
+    st.innerHTML = `<span class="spin"></span>Laya is thinking… ${s}s`; return; }
+  if (S.over) { st.textContent = `Game over: ${S.result} (${S.reason})`; return; }
+  st.textContent = S.turn === S.human ? `Your move (${S.human})` : "Laya to move";
+}
+function pct(x) { return (x * 100).toFixed(0) + "%"; }
+function renderView() {
+  const a = S.analysis, v = $("view");
+  if (!a) { v.className = "muted"; v.textContent = "Laya's evaluation of its move appears here after it plays."; return; }
+  v.className = "";
+  const maxv = Math.max(...a.top.map(t => t.visits), 1);
+  const rows = a.top.map(t => `<tr class="${t.uci === a.uci ? "played" : ""}"><td class="mv">${t.san}</td>
+      <td><div class="bar"><span style="width:${(t.win * 100).toFixed(1)}%"></span></div></td>
+      <td class="pct">${pct(t.win)}</td>${a.searched ? `<td class="vis">${t.visits} vis</td>` : ""}</tr>`).join("");
+  v.innerHTML = `<div>Laya played <b>${a.move}</b> and thinks its win chance is <b>${pct(a.win)}</b></div>
+    <div class="meter"><span style="width:${(a.win * 100).toFixed(1)}%"></span></div>
+    <div class="muted">${a.searched ? `searched ${a.positions} positions in ${a.seconds}s` : "network only, no search"}${a.pv ? ` · line: ${a.pv}` : ""}</div>
+    <div class="muted" style="margin:10px 0 4px">Its top candidates (network win chance per move${a.searched ? ", search visits" : ""}):</div>
+    <table>${rows}</table>`;
+}
+function renderMoves() {
+  const out = [], san = S.san;
+  for (let i = 0; i < san.length; i += 2)
+    out.push(`<div><span class="n">${i / 2 + 1}.</span><span>${san[i]}</span><span>${san[i + 1] || ""}</span></div>`);
+  $("moves").innerHTML = out.join("") || '<span class="muted">No moves yet.</span>';
+  $("moves").scrollTop = 1e6;
+}
+function clickSquare(sq) {
+  if (!humanToMove()) return;
+  if (selected && (S.legal[selected] || []).some(t => t.slice(0, 2) === sq)) {
+    const opts = S.legal[selected].filter(t => t.slice(0, 2) === sq);
+    if (opts.length > 1) return askPromotion(selected, sq);
+    return move(selected + opts[0]);
+  }
+  selected = S.legal[sq] ? sq : null;
+  render();
+}
+function askPromotion(from, to) {
+  const box = $("promo-choices"); box.innerHTML = "";
+  const white = S.human === "white";
+  for (const p of ["q", "r", "b", "n"]) {
+    const b = document.createElement("button");
+    b.innerHTML = `<span class="pc ${white ? "w" : "b"}">${GLYPH[p]}</span>`;
+    b.onclick = () => { $("promo").classList.remove("show"); move(from + to + p); };
+    box.appendChild(b);
+  }
+  $("promo").classList.add("show");
+}
+async function move(uci) {
+  selected = null;
+  try { S = await api("/api/move", { uci }); } catch (e) { alert(e.message); }
+  render(); engineTurn();
+}
+async function engineTurn() {
+  if (!S || S.over || S.turn === S.human) return;
+  busy = true; thinkStart = Date.now(); timer = setInterval(renderStatus, 500); render();
+  try { S = await api("/api/engine", {}); } catch (e) { alert(e.message); }
+  busy = false; clearInterval(timer); render();
+}
+$("new").onclick = async () => {
+  if (busy) return;
+  S = await api("/api/new", { color: $("color").value, think: +$("think").value });
+  selected = null; flipped = S.human === "black"; render(); engineTurn();
+};
+$("undo").onclick = async () => { if (busy) return; S = await api("/api/undo", {}); selected = null; render(); };
+$("flip").onclick = () => { flipped = !flipped; render(); };
+$("think").onchange = async () => { if (!busy) { S = await api("/api/settings", { think: +$("think").value }); render(); } };
+api("/api/state").then(s => { S = s; $("think").value = String(s.think) in { "0": 1, "3": 1, "10": 1, "30": 1 } ? String(s.think) : "10";
+  flipped = S.human === "black"; render(); engineTurn(); });
+</script>
+</body>
+</html>
