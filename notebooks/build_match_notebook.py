@@ -135,7 +135,7 @@ def scoreboard(rs):
     return "\\n".join(lines)
 
 def backup(note):
-    """Copy every finished game to the HF repo, so a killed session loses at most the games in progress."""
+    # copy every finished game to the HF repo, so a killed session loses at most the games in progress
     if not UPLOAD_TO_HF:
         return
     try:
