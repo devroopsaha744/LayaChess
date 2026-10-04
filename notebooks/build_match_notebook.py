@@ -76,6 +76,20 @@ try:
     print("HF_TOKEN secret found")
 except Exception as e:
     raise SystemExit("Attach the HF_TOKEN secret (Add-ons -> Secrets): the model repo is private") from e
+
+# check the token before any GPU work: valid, can see the model, can write (for result backups)
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ["HF_TOKEN"])
+try:
+    who = api.whoami()
+    api.model_info(CHECKPOINT)
+except Exception as e:
+    raise SystemExit(f"HF_TOKEN doesn't work ({type(e).__name__}): create a new token on huggingface.co "
+                     f"and update the Kaggle secret (Add-ons -> Secrets -> HF_TOKEN -> Edit)") from e
+role = (who.get("auth", {}).get("accessToken", {}) or {}).get("role", "?")
+print(f"Hugging Face: logged in as {who['name']}, token role: {role}, model {CHECKPOINT} reachable")
+if UPLOAD_TO_HF and role == "read":
+    print("WARNING: read-only token -> games run fine but backups to Hugging Face will fail; use a Write token")
 """)
 
 md("## Engine code (same files as `engine/laya_chess/` in the repo)")
