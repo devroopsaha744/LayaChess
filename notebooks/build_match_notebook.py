@@ -38,11 +38,34 @@ BACKUP_EVERY_MIN = 30
 
 code("""
 !pip -q install python-chess "git+https://github.com/NandhaKishorM/laya.git"
-# official Stockfish build (UCI_Elo down to 1320)
-!wget -q -O /tmp/sf.tar https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64-avx2.tar && tar -xf /tmp/sf.tar -C /tmp
-!cp $(find /tmp/stockfish -type f -name 'stockfish-ubuntu*' | head -1) /usr/local/bin/stockfish && chmod +x /usr/local/bin/stockfish
-!printf 'uci\\nquit\\n' | stockfish | grep -E '^id name|UCI_Elo'
 !nvidia-smi --query-gpu=name,memory.total --format=csv
+""")
+
+code("""
+# Official Stockfish build (UCI_Elo down to 1320), pinned. Stops the notebook here if it doesn't work,
+# so no GPU time is spent on games that can't be played.
+import os, shutil, subprocess, tarfile, urllib.request
+SF_BUILDS = [  # (url, path of the binary inside the archive)
+    ("https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-x86-64-universal.tar.gz",
+     "stockfish/stockfish-linux-x86-64-universal"),
+    ("https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-ubuntu-x86-64-avx2.tar",
+     "stockfish/stockfish-ubuntu-x86-64-avx2"),
+]
+for url, member in SF_BUILDS:
+    try:
+        archive = "/tmp/" + url.rsplit("/", 1)[1]
+        urllib.request.urlretrieve(url, archive)
+        with tarfile.open(archive) as t:
+            t.extract(member, "/tmp/sf")
+        shutil.copy(f"/tmp/sf/{member}", "/usr/local/bin/stockfish"); os.chmod("/usr/local/bin/stockfish", 0o755)
+        out = subprocess.run(["stockfish"], input="uci\\nquit\\n", capture_output=True, text=True, timeout=30).stdout
+        assert "uciok" in out and "UCI_Elo" in out
+        print([l for l in out.splitlines() if l.startswith("id name") or "UCI_Elo" in l])
+        break
+    except Exception as e:
+        print("Stockfish build failed:", url, e)
+else:
+    raise SystemExit("No working Stockfish -> stopping before any GPU time is used")
 """)
 
 code("""
