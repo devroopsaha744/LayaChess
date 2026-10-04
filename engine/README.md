@@ -39,7 +39,13 @@ UCI options: `Checkpoint`, `Revision`, `Device` (auto/cuda/mps/cpu), `Nodes` (fi
 ```bash
 python -m laya_chess.play            # opens http://localhost:8000
 ```
-Pick your colour and how long Laya thinks (instant = network only; 10–30 s = search on a Mac).
+Pick your colour and how long Laya thinks (instant = network only; 10 to 30 s = search on a Mac).
+
+- **Opening book** (on by default): Laya plays book moves while the game is on a known line (25 built-in mainstream
+  openings, or `--book my_book.bin` for any Polyglot book). It leaves the book by itself when the position isn't in the
+  book anymore; **Laya takes over** makes it stop using the book right away. Book moves are tagged in the move list.
+- **Stockfish's view** (needs `stockfish` installed): after each Laya move, the move full-strength Stockfish would have
+  played in that position and whether Laya agreed; **Ask Stockfish** shows Stockfish's move for the current position.
 
 ## Match vs Stockfish
 ```bash

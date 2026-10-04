@@ -1,14 +1,18 @@
 """Play LayaChess in your browser: `python -m laya_chess.play` then open http://localhost:8000"""
 import argparse
+import atexit
 import json
 import random
+import shutil
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import chess
+import chess.engine
 
+from .book import OpeningBook
 from .model import DEFAULT_CHECKPOINT, LayaChessModel
 from .search import MCTS, winprob_to_cp
 
@@ -16,17 +20,37 @@ WEB = Path(__file__).parent / "web"
 
 
 class Game:
-    def __init__(self, model):
+    def __init__(self, model, book_path=None, stockfish=None, sf_time=0.3):
         self.model, self.lock = model, threading.Lock()
         self.mcts = MCTS(model, batch_leaves=1 if model.device.type != "cuda" else 4)
-        self.new("white", 0)
+        self.book = OpeningBook(book_path)
+        self.sf, self.sf_limit = None, chess.engine.Limit(time=sf_time)
+        if stockfish:
+            try:
+                self.sf = chess.engine.SimpleEngine.popen_uci(stockfish)
+                atexit.register(self.sf.quit)
+            except Exception as e:
+                print("Stockfish not available:", e)
+        self.new("white", 0, True)
 
-    def new(self, color, think):
+    def new(self, color, think, use_book=True):
         self.board = chess.Board()
         self.human = {"white": chess.WHITE, "black": chess.BLACK}.get(color, random.choice([chess.WHITE, chess.BLACK]))
         self.think = float(think)
-        self.analysis = None
+        self.book_on = bool(use_book)      # turned off by "Laya takes over" or when the game leaves the book
+        self.tags = []                     # per ply: "you", "book" or "laya"
+        self.analysis = self.sf_hint = None
         self.mcts.root = self.mcts.root_board = None
+
+    def stockfish_view(self, board):
+        """Full-strength Stockfish's preferred move and evaluation (from the side to move's point of view)."""
+        if self.sf is None or board.is_game_over():
+            return None
+        info = self.sf.analyse(board, self.sf_limit)
+        mv = info["pv"][0]
+        score = info["score"].pov(board.turn)
+        return {"move": board.san(mv), "uci": mv.uci(), "cp": score.score(), "mate": score.mate(),
+                "line": board.variation_san(info["pv"][:6])}
 
     def state(self):
         b = self.board
@@ -46,7 +70,9 @@ class Game:
             "over": outcome is not None,
             "result": outcome.result() if outcome else None,
             "reason": outcome.termination.name.replace("_", " ").lower() if outcome else None,
-            "analysis": self.analysis,
+            "analysis": self.analysis, "sf_hint": self.sf_hint, "tags": self.tags,
+            "book": {"on": self.book_on, "opening": self.book.name(b), "polyglot": bool(self.book.polyglot_path)},
+            "stockfish": self.sf is not None,
             "model": {"checkpoint": self.model.checkpoint, "tag": self.model.meta.get("tag", "base"),
                       "step": self.model.meta.get("step", 0), "examples": self.model.meta.get("consumed", 0),
                       "device": str(self.model.device)},
@@ -56,25 +82,47 @@ class Game:
         mv = chess.Move.from_uci(uci)
         if self.board.turn != self.human or mv not in self.board.legal_moves:
             raise ValueError("illegal move")
-        self.board.push(mv)
+        self.board.push(mv); self.tags.append("you"); self.sf_hint = None
 
     def engine_move(self):
         b = self.board
         if b.turn == self.human or b.outcome(claim_draw=True):
             return
-        r = self.mcts.search(b, nodes=0 if self.think <= 0 else None, seconds=self.think if self.think > 0 else None)
-        top = [{"san": b.san(mv), "uci": mv.uci(), "win": round(q, 4), "visits": n} for mv, q, n in r.scores[:6]]
-        self.analysis = {"move": b.san(r.move), "uci": r.move.uci(), "win": round(r.value, 4),
-                         "cp": winprob_to_cp(r.value), "positions": r.nodes, "seconds": round(r.seconds, 1),
-                         "pv": b.variation_san(r.pv) if r.pv else "", "top": top, "searched": self.think > 0}
-        b.push(r.move)
+        sf = self.stockfish_view(b)        # what Stockfish would play here, for comparison
+        bm = self.book.move(b) if self.book_on else None
+        if bm:
+            mv = bm[0]
+            b.push(mv); opening = self.book.name(b); b.pop()   # named only once the line is unambiguous
+            self.analysis = {"book": True, "move": b.san(mv), "uci": mv.uci(), "opening": opening}
+            tag = "book"
+        else:
+            left_book = self.book_on and len(b.move_stack) > 0
+            self.book_on = False           # out of book: Laya plays on its own from here
+            r = self.mcts.search(b, nodes=0 if self.think <= 0 else None, seconds=self.think if self.think > 0 else None)
+            mv = r.move
+            top = [{"san": b.san(m), "uci": m.uci(), "win": round(q, 4), "visits": n} for m, q, n in r.scores[:6]]
+            self.analysis = {"book": False, "left_book": left_book, "move": b.san(mv), "uci": mv.uci(),
+                             "win": round(r.value, 4), "cp": winprob_to_cp(r.value), "positions": r.nodes,
+                             "seconds": round(r.seconds, 1), "pv": b.variation_san(r.pv) if r.pv else "",
+                             "top": top, "searched": self.think > 0}
+            tag = "laya"
+        if sf:
+            sf["agree"] = sf["uci"] == mv.uci()
+        self.analysis["stockfish"] = sf
+        b.push(mv); self.tags.append(tag); self.sf_hint = None
+
+    def takeover(self):
+        self.book_on = False
+
+    def hint(self):
+        self.sf_hint = self.stockfish_view(self.board)
 
     def undo(self):
         if self.board.move_stack:
-            self.board.pop()
+            self.board.pop(); self.tags.pop()
         while self.board.move_stack and self.board.turn != self.human:
-            self.board.pop()
-        self.analysis = None
+            self.board.pop(); self.tags.pop()
+        self.analysis = self.sf_hint = None
 
 
 def make_handler(game):
@@ -105,11 +153,15 @@ def make_handler(game):
             try:
                 with game.lock:
                     if self.path == "/api/new":
-                        game.new(body.get("color", "white"), body.get("think", 0))
+                        game.new(body.get("color", "white"), body.get("think", 0), body.get("book", True))
                     elif self.path == "/api/move":
                         game.human_move(body["uci"])
                     elif self.path == "/api/engine":
                         game.engine_move()
+                    elif self.path == "/api/takeover":
+                        game.takeover()
+                    elif self.path == "/api/hint":
+                        game.hint()
                     elif self.path == "/api/undo":
                         game.undo()
                     elif self.path == "/api/settings":
@@ -131,8 +183,11 @@ def main():
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--no-browser", action="store_true")
+    p.add_argument("--book", default=None, help="Polyglot .bin opening book (default: built-in book of mainstream lines)")
+    p.add_argument("--stockfish", default=shutil.which("stockfish"), help="Stockfish binary, for its preferred move")
+    p.add_argument("--sf-time", type=float, default=0.3, help="Stockfish thinking time per comparison (seconds)")
     a = p.parse_args()
-    game = Game(LayaChessModel(a.checkpoint, revision=a.revision, device=a.device))
+    game = Game(LayaChessModel(a.checkpoint, revision=a.revision, device=a.device), a.book, a.stockfish, a.sf_time)
     server = ThreadingHTTPServer((a.host, a.port), make_handler(game))
     url = f"http://{'localhost' if a.host in ('127.0.0.1', '0.0.0.0') else a.host}:{a.port}"
     print(f"LayaChess board: {url}  (Ctrl+C to stop)", flush=True)

@@ -82,6 +82,11 @@
   .moves { font-variant-numeric: tabular-nums; max-height: 220px; overflow: auto; font-size: 14px; }
   .moves span.n { color: var(--muted); display: inline-block; width: 30px; }
   .moves div { display: grid; grid-template-columns: 30px 1fr 1fr; }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+         border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+  .cmp { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .agree { color: var(--accent); font-weight: 600; }
+  label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -109,15 +114,27 @@
         </select>
       </div>
       <div class="row">
+        <label class="check"><input type="checkbox" id="book" checked> Laya uses an opening book</label>
+      </div>
+      <div class="row">
         <button class="btn primary" id="new">New game</button>
         <button class="btn" id="undo">Undo</button>
         <button class="btn" id="flip">Flip board</button>
       </div>
+      <div class="row">
+        <button class="btn" id="takeover" title="Stop following the opening book and play from training">Laya takes over</button>
+        <button class="btn" id="hint">Ask Stockfish</button>
+      </div>
       <div class="status" id="status"></div>
+      <div class="muted" id="bookline"></div>
     </div>
     <div class="panel">
       <h2>Laya's view</h2>
       <div id="view" class="muted">Laya's evaluation of its move appears here after it plays.</div>
+    </div>
+    <div class="panel" id="sfpanel">
+      <h2>Stockfish's view</h2>
+      <div id="sfview" class="muted">Press "Ask Stockfish" to see what full-strength Stockfish would play in the current position.</div>
     </div>
     <div class="panel">
       <h2>Moves</h2>
@@ -174,8 +191,12 @@ function render() {
   }
   const m = S.model;
   $("model").textContent = `${m.checkpoint} · ${m.tag}${m.examples ? ` · ${(m.examples / 1e6).toFixed(2)}M training examples` : ""} · ${m.device}`;
-  renderStatus(); renderView(); renderMoves();
+  renderStatus(); renderView(); renderMoves(); renderBook(); renderHint();
   $("undo").disabled = busy || !S.san.length;
+  $("takeover").disabled = busy || !S.book.on || S.over;
+  $("hint").disabled = busy || S.over;
+  $("sfpanel").style.display = S.stockfish ? "" : "none";
+  $("hint").style.display = S.stockfish ? "" : "none";
 }
 function renderStatus() {
   const st = $("status");
@@ -185,10 +206,36 @@ function renderStatus() {
   st.textContent = S.turn === S.human ? `Your move (${S.human})` : "Laya to move";
 }
 function pct(x) { return (x * 100).toFixed(0) + "%"; }
+function evalText(v) {
+  if (v.mate !== null && v.mate !== undefined) return v.mate > 0 ? `mate in ${v.mate}` : `gets mated in ${-v.mate}`;
+  return (v.cp >= 0 ? "+" : "") + (v.cp / 100).toFixed(2);
+}
+function renderBook() {
+  const b = S.book, el = $("bookline");
+  if (!b.on) { el.textContent = S.san.length && S.tags.includes("book") ? "Laya is out of the book and playing from its training." : ""; return; }
+  el.textContent = b.opening ? `Opening book is on: ${b.opening}.` : "Opening book is on.";
+}
+function sfCompare(sf, played) {
+  if (!sf) return "";
+  return `<div class="cmp">Stockfish would play <b>${sf.move}</b> here (${evalText(sf)} for Laya). ` +
+    (sf.agree ? `<span class="agree">Laya agreed.</span>` : `Laya chose <b>${played}</b>.`) +
+    `<div class="muted">Stockfish line: ${sf.line}</div></div>`;
+}
+function renderHint() {
+  const h = S.sf_hint, v = $("sfview");
+  if (!h) { v.className = "muted"; v.textContent = "Press \"Ask Stockfish\" to see what full-strength Stockfish would play in the current position."; return; }
+  v.className = "";
+  v.innerHTML = `For ${S.turn}, Stockfish plays <b>${h.move}</b> (${evalText(h)} for ${S.turn}).<div class="muted">Line: ${h.line}</div>`;
+}
 function renderView() {
   const a = S.analysis, v = $("view");
   if (!a) { v.className = "muted"; v.textContent = "Laya's evaluation of its move appears here after it plays."; return; }
   v.className = "";
+  if (a.book) {
+    v.innerHTML = `Laya played <b>${a.move}</b> from the opening book <span class="tag">book</span>` +
+      `<div class="muted">${a.opening ? a.opening + ". " : "A common opening move. "}Press "Laya takes over" to make it think for itself.</div>` + sfCompare(a.stockfish, a.move);
+    return;
+  }
   const maxv = Math.max(...a.top.map(t => t.visits), 1);
   const rows = a.top.map(t => `<tr class="${t.uci === a.uci ? "played" : ""}"><td class="mv">${t.san}</td>
       <td><div class="bar"><span style="width:${(t.win * 100).toFixed(1)}%"></span></div></td>
@@ -197,12 +244,14 @@ function renderView() {
     <div class="meter"><span style="width:${(a.win * 100).toFixed(1)}%"></span></div>
     <div class="muted">${a.searched ? `searched ${a.positions} positions in ${a.seconds}s` : "network only, no search"}${a.pv ? ` · line: ${a.pv}` : ""}</div>
     <div class="muted" style="margin:10px 0 4px">Its top candidates (network win chance per move${a.searched ? ", search visits" : ""}):</div>
-    <table>${rows}</table>`;
+    <table>${rows}</table>` + (a.left_book ? `<div class="muted" style="margin-top:8px">Out of the opening book: this is Laya's own move.</div>` : "") +
+    sfCompare(a.stockfish, a.move);
 }
 function renderMoves() {
   const out = [], san = S.san;
+  const mv = i => san[i] === undefined ? "" : san[i] + (S.tags[i] === "book" ? '<span class="tag">book</span>' : "");
   for (let i = 0; i < san.length; i += 2)
-    out.push(`<div><span class="n">${i / 2 + 1}.</span><span>${san[i]}</span><span>${san[i + 1] || ""}</span></div>`);
+    out.push(`<div><span class="n">${i / 2 + 1}.</span><span>${mv(i)}</span><span>${mv(i + 1)}</span></div>`);
   $("moves").innerHTML = out.join("") || '<span class="muted">No moves yet.</span>';
   $("moves").scrollTop = 1e6;
 }
@@ -240,11 +289,17 @@ async function engineTurn() {
 }
 $("new").onclick = async () => {
   if (busy) return;
-  S = await api("/api/new", { color: $("color").value, think: +$("think").value });
+  S = await api("/api/new", { color: $("color").value, think: +$("think").value, book: $("book").checked });
   selected = null; flipped = S.human === "black"; render(); engineTurn();
 };
 $("undo").onclick = async () => { if (busy) return; S = await api("/api/undo", {}); selected = null; render(); };
 $("flip").onclick = () => { flipped = !flipped; render(); };
+$("takeover").onclick = async () => { if (busy) return; S = await api("/api/takeover", {}); render(); };
+$("hint").onclick = async () => {
+  if (busy) return;
+  $("sfview").className = "muted"; $("sfview").textContent = "Stockfish is thinking…";
+  S = await api("/api/hint", {}); render();
+};
 $("think").onchange = async () => { if (!busy) { S = await api("/api/settings", { think: +$("think").value }); render(); } };
 api("/api/state").then(s => { S = s; $("think").value = String(s.think) in { "0": 1, "3": 1, "10": 1, "30": 1 } ? String(s.think) : "10";
   flipped = S.human === "black"; render(); engineTurn(); });
