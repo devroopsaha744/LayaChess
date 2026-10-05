@@ -1,0 +1,8 @@
+torch
+transformers>=4.48
+huggingface_hub>=0.25
+safetensors
+numpy
+python-chess>=1.10
+spaces
+laya @ git+https://github.com/NandhaKishorM/laya.git

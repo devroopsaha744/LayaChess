@@ -1,6 +1,7 @@
 # LayaChess engine
 
 Plays chess with the fine-tuned Laya checkpoint from Hugging Face (`datafreak/laya-chess`), with or without search.
+Write-up: [LayaChess on my blog](https://devroopsaha744.github.io/portfolio/blog/laya-chess/). Play online: [the Hugging Face Space](https://huggingface.co/spaces/datafreak/laya-chess).
 
 | File | What |
 |---|---|
@@ -18,7 +19,6 @@ Plays chess with the fine-tuned Laya checkpoint from Hugging Face (`datafreak/la
 cd engine
 uv venv --python 3.12 .venv && source .venv/bin/activate
 uv pip install -r requirements.txt
-hf auth login          # once, so the private checkpoint can be downloaded
 ```
 
 ## Use

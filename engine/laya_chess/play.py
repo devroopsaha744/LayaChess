@@ -130,6 +130,9 @@ def make_handler(game):
         def log_message(self, *a):
             pass
 
+        def _game(self):
+            return game                    # overridden by the Hugging Face Space (one game per visitor)
+
         def _send(self, code, body, ctype="application/json"):
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
             self.send_response(code)
@@ -142,6 +145,7 @@ def make_handler(game):
         def do_GET(self):
             if self.path in ("/", "/index.html"):
                 return self._send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
+            game = self._game()
             if self.path == "/api/state":
                 with game.lock:
                     return self._send(200, game.state())
@@ -150,6 +154,7 @@ def make_handler(game):
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
+            game = self._game()
             try:
                 with game.lock:
                     if self.path == "/api/new":
