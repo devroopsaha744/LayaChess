@@ -22,5 +22,5 @@ fine-tuned on 2 million Stockfish-rated moves and wrapped in a Monte Carlo tree 
 - Run it locally: see the [setup steps](https://github.com/devroopsaha744/LayaChess#run-it-on-your-own-machine)
 
 Laya thinks on ZeroGPU, a shared free GPU, so the first move can take a while and you may wait in a queue.
-Search is capped at 10 seconds a move. Stockfish's preferred move is shown next to Laya's for comparison only; it
+Laya can think up to 30 seconds a move; that time comes out of each visitor's daily ZeroGPU quota. Stockfish's preferred move is shown next to Laya's for comparison only; it
 never picks Laya's moves.

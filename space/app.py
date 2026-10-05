@@ -21,7 +21,7 @@ from laya_chess import play
 from laya_chess.model import DEFAULT_CHECKPOINT, LayaChessModel
 from laya_chess.search import MCTS
 
-MAX_THINK = float(os.environ.get("MAX_THINK", 10))
+MAX_THINK = float(os.environ.get("MAX_THINK", 30))
 ON_SPACE = bool(os.environ.get("SPACE_ID"))
 MODEL = LayaChessModel(os.environ.get("CHECKPOINT", DEFAULT_CHECKPOINT), device="cuda" if ON_SPACE else "auto")
 
@@ -32,7 +32,12 @@ if SF:
     SF.configure({"Threads": 1, "Hash": 64})
 
 
-@spaces.GPU(duration=40)
+def gpu_duration(moves, seconds):
+    # reserve only what the chosen thinking time needs: shorter reservations get better queue priority
+    return int(seconds) + 20
+
+
+@spaces.GPU(duration=gpu_duration)
 def gpu_search(moves, seconds):
     board = chess.Board()
     for m in moves:
@@ -47,7 +52,14 @@ class RemoteSearch:
     """Stands in for the game's MCTS: each search is one GPU call from the move list."""
 
     def search(self, board, nodes=None, seconds=None):
-        d = gpu_search([m.uci() for m in board.move_stack], 0.0 if nodes == 0 else float(seconds or 0))
+        try:
+            d = gpu_search([m.uci() for m in board.move_stack], 0.0 if nodes == 0 else float(seconds or 0))
+        except Exception as e:
+            if "quota" in str(e).lower():
+                raise ValueError("You've used up today's free GPU time on Hugging Face (2 minutes a day logged out, "
+                                 "5 minutes logged in), so Laya can't think right now. Log in to Hugging Face, or "
+                                 "try again tomorrow.") from None
+            raise
         mv = chess.Move.from_uci
         return types.SimpleNamespace(move=mv(d["move"]), value=d["value"], nodes=d["nodes"], seconds=d["seconds"],
                                      pv=[mv(m) for m in d["pv"]], scores=[(mv(m), q, n) for m, q, n in d["scores"]])
@@ -145,7 +157,8 @@ def board_page():
     end = page.index("\n}\n", start) + 3
     page = page[:start] + page[end:]                       # the bridge above defines api()
     page = page.replace("</head>", BRIDGE + "</head>", 1)
-    return page.replace('<option value="30">30 s (search)</option>', "")
+    return page.replace('<option value="30">30 s (search)</option>',
+                        '<option value="30">30 s (search, uses more GPU time)</option>')
 
 
 PARENT_JS = """<script>
@@ -177,7 +190,8 @@ CSS = ".laya-hidden { display: none !important; } #laya-frame { width: 100%; hei
 
 INTRO = """**LayaChess**: [Laya](https://huggingface.co/convaiinnovations/laya), a 421M System 1 decision model, fine-tuned
 on 2M Stockfish-rated moves and wrapped in a tree search. Laya thinks on a shared free GPU, so the first move can take
-a while, and you may wait in a queue. [How it works](https://devroopsaha744.github.io/portfolio/blog/laya-chess/) ·
+a while, and you may wait in a queue. Hugging Face gives each visitor 2 minutes of GPU time a day (5 if you're logged
+in), and Laya spends its thinking time from that: about 4 moves at 30 s, 12 at 10 s, many more at 3 s or instantly. [How it works](https://devroopsaha744.github.io/portfolio/blog/laya-chess/) ·
 [Code](https://github.com/devroopsaha744/LayaChess) · [Video](https://www.youtube.com/watch?v=bPpAlWArs7E)"""
 
 with gr.Blocks(title="LayaChess") as demo:
